@@ -2,7 +2,7 @@
 DataAccessAgent 
 load_text_file → I/O responsibility
 preprocess_text → cleaning responsibility
-get_tokens_from_file → public method Flask will call
+get_tokens_from_file → public method Flask will call.
 
 '''
 import re
