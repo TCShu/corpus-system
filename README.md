@@ -69,19 +69,21 @@ cd corpus-system
 ### 2. Create virtual environment
 
 PowerShell:
+```
 python -m venv venv
 venv\Scripts\activate
+```
 
 ### 3. Install dependencies
-
+```
 pip install -r requirements.txt
-
+```
 ---
 
 ## Running the Application
-
+```
 python run.py
-
+```
 
 Server runs at:
 http://127.0.0.1:5000
@@ -91,7 +93,7 @@ http://127.0.0.1:5000
 ## API Endpoints
 
 ### Upload Corpus
-POST /upload
+```POST /upload```
 
 Form-data:
 - file: text file
@@ -101,7 +103,7 @@ Indexes document into Chroma with a corpus_id.
 ---
 
 ### Query Corpus
-POST /ask
+```POST /ask```
 
 
 JSON body:
