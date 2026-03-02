@@ -1,136 +1,113 @@
-# **ACAS Corpus Analysis System**
+# ACAS – Agent-Based Corpus Analysis System
+
 ## Project Overview
-The Agent-Based Corpus Analysis System (ACAS) is designed to facilitate automated linguistic analysis of text corpora through an intelligent, agent-based architecture.
 
-The system provides:
-- Frequency analysis
-- Keyword extraction
-- N-gram analysis
-- KWIC (Key Word in Context)
-- Coordinated agent responses
+The Agent-Based Corpus Analysis System (ACAS) is an intelligent backend system for corpus ingestion, semantic retrieval, and agent-based text analysis.
 
-The backend is built with **Python + Flask** and organized using an **agent-based architecture**.
-The frontend will communicate with the backend through HTTP API endpoints.
+The system supports:
+
+- Dynamic corpus upload
+- Multi-corpus isolation
+- Retrieval-Augmented Generation (RAG)
+- Local LLM responses via Ollama
+- Vector-based semantic search using Chroma
+- Agent-based modular backend architecture
+
+The backend is built using **Python + Flask** and organized using a modular agent-based design.
+
+---
+
+## Current Architecture
+
+Client  
+↓  
+Flask API  
+↓  
+Coordinating Logic (in progress)  
+↓  
+Data Access Agent + RAG Agent  
+↓  
+Chroma Vector Store + (Upcoming) PostgreSQL  
+↓  
+Ollama (Local LLM)
 
 ---
 
 ## Tech Stack
+
 | Layer | Technology |
-|-------|------|
+|--------|------------|
 | Backend | Python, Flask |
-|-------|------|
-| NLP | NLTK |
-|-------|------|
+| LLM | Ollama (local models) |
+| Vector Database | Chroma |
+| Embeddings | langchain_ollama |
 | Architecture | Agent-based modular services |
-| Database | PostgreSQL |
-| Containerization | Docker |
-| Frontend | HTML / CSS / JavaScript |
+| Database (next phase) | PostgreSQL |
 | Testing | Pytest |
 
 ---
 
 ## Repository Structure
 corpus-system/
-├── agents/ # Independent analysis agents 
-├── app/ # Flask application 
-├── frontend/ # HTML templates + static files 
-├── database/ # Models and migrations (future sprint) 
-├── tests/ # Unit and integration tests 
-├── data/ # Sample corpora 
-├── docker/ # Containerization (future sprint) 
+├── agents/ # Agent implementations (RAG, Data, etc.)
+├── app/ # Flask app + routes
+├── data/ # Uploaded corpora
+├── chroma_db/ # Local vector index (DO NOT COMMIT)
+├── tests/ # Unit + integration tests
+├── run.py # App entry point
 └── README.md
 
 ---
 
-## Prerequisites
-Install the following before setup:
-- Python 3.10+
-- pip
-- git
+## Setup
 
----
+### 1. Clone
 
-## Project Setup
-### 1. Clone the repository
 git clone <repo-url>
-cd acas-corpus-analysis
+cd corpus-system
 
-### 2. Create a virtual environment
+### 2. Create virtual environment
 
-Windows:
-    python -m venv venv
-    venv\Scripts\activate
-
-Mac/Linux:
-    python3 -m venv venv
-    source venv/bin/activate
-
-You should now see:
-    (venv)
+PowerShell:
+python -m venv venv
+venv\Scripts\activate
 
 ### 3. Install dependencies
+
 pip install -r requirements.txt
-
-### 4. Download NLP resources (IMPORTANT)
-We use NLTK tokenizers which must be installed once per environment.
-
-Run:
-    python -m nltk.downloader punkt
-
-This only needs to be done once after creating the virtual environment.
 
 ---
 
 ## Running the Application
-From the project root:
-    python -m backend.app
 
-Then open in browser:
-    http://127.0.0.1:5000
+python run.py
 
----
 
-## Development Workflow
-### Branching Strategy
-
-Each feature must be developed in its own branch:
-
-    feature/data-access-agent
-    feature/frequency-agent
-    feature/flask-routes
-    feature/frontend-upload
-
-Never push directly to main.
+Server runs at:
+http://127.0.0.1:5000
 
 ---
 
-## Agents Architecture
+## API Endpoints
 
-Each analysis module is an independent agent:
+### Upload Corpus
+POST /upload
 
-| Agent | Responsibility |
-| Data Access Agent | Reads and validates corpus |
-| Frequency Agent | Word frequency counts |
-| Keyword Agent | Important term extraction |
-| Ngram Agent | Phrase pattern analysis |
-| KWIC Agent | Context search |
-| Coordinating Agent | Combines agent outputs |
+Form-data:
+- file: text file
 
-Agents must:
-
-- Be independent
-- Not depend on Flask
-- Return pure Python data structures (dict/list)
+Indexes document into Chroma with a corpus_id.
 
 ---
 
-## Testing
-Tests will be written using Pytest:
-    pytest
+### Query Corpus
+POST /ask
 
 
-## NLTK Setup
-After installing dependencies, run:
+JSON body:
 
-```bash 
-python -m nltk.downloader punkt
+```json
+{
+  "question": "Your question here",
+  "corpus_id": "sample.txt"
+}

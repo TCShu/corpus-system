@@ -205,3 +205,17 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# --- ACAS Project Specific ---
+chroma_db/
+data/*.txt
+data/*.pdf
+data/*.docx
+
+# Local development artifacts
+*.sqlite3
+*.db
+
+# Logs
+logs/
+*.log

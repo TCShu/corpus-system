@@ -9,11 +9,10 @@ import re
 import nltk
 from nltk.tokenize import word_tokenize
 
+nltk.download("punkt")
+
 
 class DataAccessAgent:
-    def __init__(self):
-        pass
-
     def load_text_file(self, file_path):
         with open(file_path, "r", encoding="utf-8") as file:
             return file.read()
@@ -23,10 +22,10 @@ class DataAccessAgent:
         text = re.sub(r"\s+", " ", text)
         return text.strip()
 
-    def get_tokens_from_file(self, file_path):
+    def get_clean_text_from_file(self, file_path):
         raw_text = self.load_text_file(file_path)
-        clean_text = self.preprocess_text(raw_text)
-        tokens = word_tokenize(clean_text)
-        tokens = word_tokenize(clean_text)
-        return tokens
+        return self.preprocess_text(raw_text)
 
+    def get_tokens_from_file(self, file_path):
+        clean_text = self.get_clean_text_from_file(file_path)
+        return word_tokenize(clean_text)
