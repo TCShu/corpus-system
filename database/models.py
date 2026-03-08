@@ -1,6 +1,7 @@
 from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey, Boolean, JSON, Float
 from sqlalchemy.orm import relationship, declarative_base
-from datetime import datetime
+from datetime import datetime, timezone
+from pgvector.sqlalchemy import Vector
 
 Base = declarative_base()
 
@@ -15,7 +16,7 @@ class User(Base):
     email = Column(String(150), unique=True, nullable=False)
     password_hash = Column(String(255), nullable=False)
     role = Column(String(50), default="student")
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     corpora = relationship("Corpus", back_populates="owner")
 
@@ -33,12 +34,12 @@ class Corpus(Base):
     language = Column(String(50))
     source_type = Column(String(50))
     file_path = Column(Text)
-    upload_date = Column(DateTime, default=datetime.utcnow)
+    upload_date = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     total_documents = Column(Integer, default=0)
     status = Column(String(50), default="raw")
 
     owner = relationship("User", back_populates="corpora")
-    documents = relationship("Document", back_populates="corpus")
+    documents = relationship("Document", back_populates="corpus", cascade="all, delete-orphan")
 
 
 # -----------------------
@@ -58,9 +59,10 @@ class Document(Base):
     preprocessed_text = Column(Text)
 
     word_count = Column(Integer)
-    metadata = Column(JSON)
+    doc_metadata = Column(JSON)
 
     corpus = relationship("Corpus", back_populates="documents")
+    chunks = relationship("DocumentChunk", back_populates="document", cascade="all, delete-orphan")
 
 
 # -----------------------
@@ -80,8 +82,9 @@ class Query(Base):
     execution_time_ms = Column(Integer)
     status = Column(String(50), default="pending")
 
-    timestamp = Column(DateTime, default=datetime.utcnow)
-
+    timestamp = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    user = relationship("User")
+    corpus = relationship("Corpus")
 
 # -----------------------
 # Analysis Results
@@ -99,8 +102,10 @@ class AnalysisResult(Base):
     validated = Column(Boolean, default=False)
     validation_report = Column(JSON)
 
-    created_at = Column(DateTime, default=datetime.utcnow)
-
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    frequencies = relationship("FrequencyAnalysis")
+    kwic_entries = relationship("KWICEntry")
+    ngrams = relationship("Ngram")
 
 # -----------------------
 # Agent Execution Log
@@ -173,15 +178,35 @@ class Ngram(Base):
 
 
 # -----------------------
+# Document Chunks
+# -----------------------
+class DocumentChunk(Base):
+    __tablename__ = "document_chunks"
+
+    chunk_id = Column(Integer, primary_key=True)
+    document_id = Column(Integer, ForeignKey("documents.document_id"))
+
+    chunk_text = Column(Text)
+    chunk_index = Column(Integer)
+    token_count = Column(Integer)
+
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+    document = relationship("Document", back_populates="chunks")
+    embeddings = relationship("VectorEmbedding", back_populates="chunk", cascade="all, delete-orphan")
+
+
+# -----------------------
 # Vector Embeddings
 # -----------------------
 class VectorEmbedding(Base):
     __tablename__ = "vector_embeddings"
 
     embedding_id = Column(Integer, primary_key=True)
-    document_id = Column(Integer, ForeignKey("documents.document_id"))
+    chunk_id = Column(Integer, ForeignKey("document_chunks.chunk_id"))
 
-    embedding_vector = Column(JSON)
+    embedding_vector = Column(Vector(1536).with_variant(JSON, "sqlite"))
     model_used = Column(String(100))
 
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    chunk = relationship("DocumentChunk", back_populates="embeddings")
