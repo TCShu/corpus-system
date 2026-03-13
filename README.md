@@ -48,6 +48,7 @@ Ollama (Local LLM)
 ---
 
 ## Repository Structure
+```
 corpus-system/
 ├── agents/ # Agent implementations (RAG, Data, etc.)
 ├── app/ # Flask app + routes
@@ -56,6 +57,7 @@ corpus-system/
 ├── tests/ # Unit + integration tests
 ├── run.py # App entry point
 └── README.md
+```
 
 ---
 
