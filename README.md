@@ -33,14 +33,49 @@ Users upload corpora and ask natural-language analysis questions through a web U
 
 ## Project Structure
 
-```text
-agents/      # All analysis + coordination + validation agents
-app/         # Flask app factory, routes, main entrypoint
-database/    # SQLAlchemy config/models/session helpers
-services/    # CRUD services + safe code execution service
-frontend/    # HTML template(s)
-tests/       # Unit/integration API and DB tests
+## Current Architecture
+
+Client  
+↓  
+Flask API  
+↓  
+Coordinating Logic (in progress)  
+↓  
+Data Access Agent + RAG Agent  
+↓  
+Chroma Vector Store + (Upcoming) PostgreSQL  
+↓  
+Ollama (Local LLM)
+
+---
+
+## Tech Stack
+
+| Layer | Technology |
+|--------|------------|
+| Backend | Python, Flask |
+| LLM | Ollama (local models) |
+| Vector Database | Chroma |
+| Embeddings | langchain_ollama |
+| Architecture | Agent-based modular services |
+| Database (next phase) | PostgreSQL |
+| Testing | Pytest |
+
+---
+
+## Repository Structure
 ```
+corpus-system/
+├── agents/ # Agent implementations (RAG, Data, etc.)
+├── app/ # Flask app + routes
+├── data/ # Uploaded corpora
+├── chroma_db/ # Local vector index (DO NOT COMMIT)
+├── tests/ # Unit + integration tests
+├── run.py # App entry point
+└── README.md
+```
+
+---
 
 ## Setup
 
