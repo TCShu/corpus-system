@@ -1,0 +1,957 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ACAS - Corpus Analysis Workspace</title>
+  <style>
+    :root {
+      --bg: #091018;
+      --bg-glow: #12263f;
+      --panel: rgba(18, 26, 39, 0.88);
+      --panel-strong: #111a28;
+      --panel-soft: #192334;
+      --line: rgba(146, 172, 210, 0.16);
+      --text: #e8eef8;
+      --muted: #97a7c3;
+      --accent: #2d8cff;
+      --accent-soft: #66b4ff;
+      --gold: #f0bb54;
+      --green: #30c48d;
+      --red: #ff6e6e;
+      --shadow: 0 18px 45px rgba(0, 0, 0, 0.35);
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      color: var(--text);
+      font-family: Georgia, "Palatino Linotype", serif;
+      background:
+        radial-gradient(circle at top left, rgba(73, 142, 255, 0.18), transparent 28%),
+        radial-gradient(circle at top right, rgba(240, 187, 84, 0.12), transparent 22%),
+        linear-gradient(180deg, #0a1018 0%, #070b12 100%);
+    }
+
+    .layout {
+      display: grid;
+      grid-template-columns: 320px minmax(0, 1fr);
+      min-height: 100vh;
+    }
+
+    .sidebar {
+      padding: 1.5rem 1.2rem;
+      border-right: 1px solid var(--line);
+      background: linear-gradient(180deg, rgba(16, 23, 35, 0.95), rgba(10, 14, 22, 0.98));
+      display: flex;
+      flex-direction: column;
+      gap: 1.2rem;
+    }
+
+    .brand {
+      padding: 1rem;
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      background: linear-gradient(180deg, rgba(34, 49, 75, 0.35), rgba(16, 23, 35, 0.45));
+      box-shadow: var(--shadow);
+    }
+
+    .brand h1 {
+      margin: 0;
+      font-size: 1.8rem;
+      letter-spacing: 0.03em;
+    }
+
+    .brand p {
+      margin: 0.45rem 0 0;
+      color: var(--muted);
+      font-size: 0.98rem;
+      line-height: 1.45;
+    }
+
+    .upload-box,
+    .sidebar-panel {
+      padding: 1rem;
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      background: rgba(19, 29, 43, 0.72);
+    }
+
+    .section-title {
+      margin: 0 0 0.75rem;
+      color: #ced8ea;
+      font-size: 0.86rem;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      font-family: "Segoe UI", sans-serif;
+    }
+
+    .upload-button,
+    .send-button {
+      border: none;
+      cursor: pointer;
+      border-radius: 14px;
+      background: linear-gradient(135deg, var(--accent), var(--accent-soft));
+      color: white;
+      font-weight: 700;
+      font-size: 1rem;
+      padding: 0.95rem 1rem;
+      box-shadow: 0 10px 24px rgba(45, 140, 255, 0.28);
+    }
+
+    .upload-note,
+    .helper-copy {
+      margin: 0.55rem 0 0;
+      color: var(--muted);
+      font-size: 0.88rem;
+      line-height: 1.5;
+      font-family: "Segoe UI", sans-serif;
+    }
+
+    .project-list,
+    .agent-list {
+      list-style: none;
+      margin: 0;
+      padding: 0;
+      display: grid;
+      gap: 0.55rem;
+    }
+
+    .project-item,
+    .agent-item {
+      border: 1px solid transparent;
+      border-radius: 14px;
+      padding: 0.75rem 0.85rem;
+      background: rgba(255, 255, 255, 0.03);
+      transition: 120ms ease;
+      font-family: "Segoe UI", sans-serif;
+    }
+
+    .project-item:hover {
+      border-color: rgba(102, 180, 255, 0.3);
+      transform: translateY(-1px);
+      cursor: pointer;
+    }
+
+    .project-item.active {
+      border-color: rgba(102, 180, 255, 0.5);
+      background: rgba(45, 140, 255, 0.1);
+    }
+
+    .agent-item {
+      color: #d1dbeb;
+      font-size: 0.95rem;
+    }
+
+    .main {
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+      min-width: 0;
+    }
+
+    .hero {
+      padding: 1.35rem 1.5rem 0.8rem;
+    }
+
+    .hero-card {
+      border: 1px solid var(--line);
+      border-radius: 22px;
+      background:
+        linear-gradient(135deg, rgba(19, 31, 49, 0.94), rgba(12, 18, 29, 0.94)),
+        radial-gradient(circle at top right, rgba(45, 140, 255, 0.2), transparent 30%);
+      padding: 1.4rem 1.5rem;
+      box-shadow: var(--shadow);
+    }
+
+    .hero-title {
+      margin: 0;
+      font-size: 2rem;
+      line-height: 1.15;
+    }
+
+    .hero-subtitle {
+      margin: 0.65rem 0 0;
+      color: #bcc9de;
+      max-width: 900px;
+      line-height: 1.6;
+      font-size: 1rem;
+      font-family: "Segoe UI", sans-serif;
+    }
+
+    .thread {
+      padding: 0 1.5rem 1rem;
+      overflow-y: auto;
+    }
+
+    .bubble {
+      max-width: 980px;
+      margin-bottom: 0.9rem;
+      padding: 1rem 1.1rem;
+      border-radius: 18px;
+      border: 1px solid var(--line);
+      background: rgba(17, 24, 36, 0.75);
+      line-height: 1.55;
+      box-shadow: var(--shadow);
+      white-space: pre-wrap;
+    }
+
+    .bubble.user {
+      margin-left: auto;
+      background: rgba(18, 29, 48, 0.8);
+      border-color: rgba(102, 180, 255, 0.25);
+      font-family: "Segoe UI", sans-serif;
+    }
+
+    .analysis-card,
+    .error-card {
+      max-width: 980px;
+      margin-bottom: 1rem;
+      border-radius: 22px;
+      border: 1px solid var(--line);
+      background: linear-gradient(180deg, rgba(18, 26, 39, 0.95), rgba(13, 19, 30, 0.95));
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+
+    .analysis-head,
+    .error-head {
+      padding: 1rem 1.2rem;
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 1rem;
+      background: rgba(255, 255, 255, 0.02);
+    }
+
+    .analysis-title,
+    .error-title {
+      margin: 0;
+      font-size: 1.2rem;
+    }
+
+    .analysis-subtitle {
+      margin: 0.3rem 0 0;
+      color: var(--muted);
+      font-size: 0.92rem;
+      font-family: "Segoe UI", sans-serif;
+    }
+
+    .tag {
+      padding: 0.42rem 0.7rem;
+      border-radius: 999px;
+      background: rgba(48, 196, 141, 0.15);
+      color: #b6f0d7;
+      border: 1px solid rgba(48, 196, 141, 0.28);
+      font-size: 0.84rem;
+      font-family: "Segoe UI", sans-serif;
+      white-space: nowrap;
+    }
+
+    .analysis-body,
+    .error-body {
+      padding: 1.1rem 1.2rem 1.25rem;
+    }
+
+    .summary-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+      gap: 0.8rem;
+      margin-bottom: 1rem;
+    }
+
+    .metric {
+      padding: 0.9rem 1rem;
+      border-radius: 16px;
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid var(--line);
+    }
+
+    .metric-label {
+      color: var(--muted);
+      font-size: 0.78rem;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      font-family: "Segoe UI", sans-serif;
+    }
+
+    .metric-value {
+      margin-top: 0.35rem;
+      font-size: 1.35rem;
+      font-weight: 700;
+      font-family: "Segoe UI", sans-serif;
+    }
+
+    .table-wrap {
+      overflow-x: auto;
+      border-radius: 16px;
+      border: 1px solid var(--line);
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-family: "Segoe UI", sans-serif;
+    }
+
+    th,
+    td {
+      padding: 0.85rem 0.8rem;
+      text-align: left;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+      vertical-align: middle;
+    }
+
+    th {
+      color: #c6d3e7;
+      font-size: 0.82rem;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      background: rgba(255, 255, 255, 0.025);
+    }
+
+    tbody tr:nth-child(even) {
+      background: rgba(255, 255, 255, 0.02);
+    }
+
+    .bar-cell {
+      min-width: 180px;
+    }
+
+    .bar-track {
+      height: 10px;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.08);
+      overflow: hidden;
+    }
+
+    .bar-fill {
+      height: 100%;
+      border-radius: 999px;
+      background: linear-gradient(90deg, var(--accent), var(--gold));
+    }
+
+    .kwic-keyword {
+      display: inline-block;
+      padding: 0.1rem 0.4rem;
+      border-radius: 999px;
+      background: rgba(240, 187, 84, 0.17);
+      color: #ffe1a1;
+      font-weight: 700;
+    }
+
+    .kwic-context {
+      color: #b9c6db;
+      font-family: "Consolas", monospace;
+      font-size: 0.92rem;
+    }
+
+    .scale {
+      display: flex;
+      align-items: center;
+      gap: 0.7rem;
+    }
+
+    .scale-track {
+      position: relative;
+      flex: 1;
+      height: 10px;
+      border-radius: 999px;
+      background: linear-gradient(90deg, #284f86, #4f7498, #8a8f99);
+      overflow: hidden;
+    }
+
+    .scale-marker {
+      position: absolute;
+      top: -3px;
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      background: #fff2cc;
+      border: 2px solid rgba(0, 0, 0, 0.3);
+      transform: translateX(-50%);
+    }
+
+    .empty-state {
+      padding: 1rem;
+      border: 1px dashed rgba(151, 167, 195, 0.25);
+      border-radius: 16px;
+      color: var(--muted);
+      font-family: "Segoe UI", sans-serif;
+    }
+
+    .composer {
+      padding: 1rem 1.5rem 1.4rem;
+      border-top: 1px solid var(--line);
+      background: rgba(7, 11, 18, 0.94);
+      backdrop-filter: blur(10px);
+    }
+
+    .controls {
+      display: grid;
+      grid-template-columns: minmax(180px, 260px) minmax(180px, 260px);
+      gap: 0.7rem;
+      margin-bottom: 0.8rem;
+    }
+
+    select,
+    textarea {
+      width: 100%;
+      border-radius: 16px;
+      border: 1px solid rgba(120, 145, 182, 0.22);
+      background: rgba(11, 16, 25, 0.94);
+      color: var(--text);
+      padding: 0.85rem 0.95rem;
+      font-size: 0.98rem;
+    }
+
+    select {
+      font-family: "Segoe UI", sans-serif;
+    }
+
+    textarea {
+      min-height: 96px;
+      resize: vertical;
+      font-family: "Segoe UI", sans-serif;
+      line-height: 1.55;
+    }
+
+    .composer-row {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 0.8rem;
+      align-items: end;
+    }
+
+    .composer-tip {
+      margin-top: 0.6rem;
+      color: var(--muted);
+      font-size: 0.88rem;
+      font-family: "Segoe UI", sans-serif;
+    }
+
+    @media (max-width: 980px) {
+      .layout {
+        grid-template-columns: 1fr;
+      }
+
+      .sidebar {
+        border-right: none;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .controls,
+      .composer-row {
+        grid-template-columns: 1fr;
+      }
+
+      .send-button {
+        width: 100%;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="layout">
+    <aside class="sidebar">
+      <section class="brand">
+        <h1>ACAS</h1>
+        <p>Corpus analysis with specialized agents for frequency, concordance, collocation, keyword comparison, and safe linguistic fallback execution.</p>
+      </section>
+
+      <section class="upload-box">
+        <p class="section-title">Corpus Intake</p>
+        <button class="upload-button" id="uploadButton">Upload Corpus</button>
+        <input id="fileInput" type="file" hidden />
+        <p class="upload-note">Accepted formats: TXT, CSV, JSON, XML. Uploaded corpora become available instantly for analysis.</p>
+      </section>
+
+      <section class="sidebar-panel">
+        <p class="section-title">Projects</p>
+        <ul class="project-list" id="projectList"></ul>
+      </section>
+
+      <section class="sidebar-panel" style="margin-top:auto;">
+        <p class="section-title">Analysis Modes</p>
+        <ul class="agent-list">
+          <li class="agent-item">Frequency tables with ranked scales</li>
+          <li class="agent-item">KWIC concordance with contextual windows</li>
+          <li class="agent-item">N-gram and collocation scoring</li>
+          <li class="agent-item">Keyword comparison across corpora</li>
+          <li class="agent-item">Safe fallback for unsupported linguistic tasks</li>
+        </ul>
+      </section>
+    </aside>
+
+    <main class="main">
+      <section class="hero">
+        <div class="hero-card">
+          <h2 class="hero-title">Readable corpus analysis, not raw model output.</h2>
+          <p class="hero-subtitle">
+            Ask a question in plain language and ACAS will turn the result into tables, score scales, and corpus-friendly summaries so the meaning is clear to non-technical users.
+          </p>
+        </div>
+      </section>
+
+      <section class="thread" id="thread">
+        <div class="bubble">
+Try prompts like:
+- Show the top 20 most frequent words excluding stopwords
+- Generate KWIC for "language" with a 10-word context window
+- Find bigram collocations
+- Compare my target corpus against a reference corpus
+        </div>
+      </section>
+
+      <section class="composer">
+        <div class="controls">
+          <select id="corpusSelect"></select>
+          <select id="referenceSelect">
+            <option value="">No reference corpus</option>
+          </select>
+        </div>
+        <div class="composer-row">
+          <div>
+            <textarea id="queryInput" placeholder="Ask for corpus linguistic analysis in natural language."></textarea>
+            <div class="composer-tip">Safety validation happens in the backend automatically before any result is shown.</div>
+          </div>
+          <button class="send-button" id="sendButton">Analyze</button>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script>
+    const thread = document.getElementById("thread");
+    const queryInput = document.getElementById("queryInput");
+    const sendButton = document.getElementById("sendButton");
+    const uploadButton = document.getElementById("uploadButton");
+    const fileInput = document.getElementById("fileInput");
+    const corpusSelect = document.getElementById("corpusSelect");
+    const referenceSelect = document.getElementById("referenceSelect");
+    const projectList = document.getElementById("projectList");
+
+    function escapeHtml(value) {
+      return String(value ?? "")
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#39;");
+    }
+
+    function formatNumber(value, digits = 0) {
+      return Number(value ?? 0).toLocaleString(undefined, {
+        minimumFractionDigits: digits,
+        maximumFractionDigits: digits,
+      });
+    }
+
+    function addBubble(text, role = "assistant") {
+      const bubble = document.createElement("div");
+      bubble.className = `bubble ${role}`;
+      bubble.textContent = text;
+      thread.appendChild(bubble);
+      thread.scrollTop = thread.scrollHeight;
+    }
+
+    function appendNode(node) {
+      thread.appendChild(node);
+      thread.scrollTop = thread.scrollHeight;
+    }
+
+    function buildMetric(label, value) {
+      return `
+        <div class="metric">
+          <div class="metric-label">${escapeHtml(label)}</div>
+          <div class="metric-value">${escapeHtml(value)}</div>
+        </div>
+      `;
+    }
+
+    function buildFrequencyTable(result) {
+      const rows = result.rows || [];
+      const maxFrequency = Math.max(...rows.map((row) => row.frequency || 0), 1);
+      const summary = `
+        <div class="summary-grid">
+          ${buildMetric("Analysis", "Frequency")}
+          ${buildMetric("Tokens", formatNumber(result.total_tokens || 0))}
+          ${buildMetric("Rows Shown", formatNumber(rows.length))}
+        </div>
+      `;
+
+      if (!rows.length) {
+        return summary + `<div class="empty-state">No frequency rows were returned for this corpus.</div>`;
+      }
+
+      const body = rows.map((row) => {
+        const width = ((row.frequency || 0) / maxFrequency) * 100;
+        return `
+          <tr>
+            <td>${escapeHtml(row.rank)}</td>
+            <td><strong>${escapeHtml(row.word)}</strong></td>
+            <td>${formatNumber(row.frequency)}</td>
+            <td>${formatNumber((row.relative_frequency || 0) * 100, 2)}%</td>
+            <td class="bar-cell">
+              <div class="bar-track"><div class="bar-fill" style="width:${width}%;"></div></div>
+            </td>
+          </tr>
+        `;
+      }).join("");
+
+      return summary + `
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Rank</th>
+                <th>Word</th>
+                <th>Frequency</th>
+                <th>Relative Share</th>
+                <th>Scale</th>
+              </tr>
+            </thead>
+            <tbody>${body}</tbody>
+          </table>
+        </div>
+      `;
+    }
+
+    function buildKwicTable(result) {
+      const rows = result.matches || [];
+      const summary = `
+        <div class="summary-grid">
+          ${buildMetric("Analysis", "KWIC")}
+          ${buildMetric("Keyword", result.keyword || "-")}
+          ${buildMetric("Window", `${result.window_size || 0} words`)}
+          ${buildMetric("Matches", formatNumber(rows.length))}
+        </div>
+      `;
+
+      if (!rows.length) {
+        return summary + `<div class="empty-state">No concordance lines matched this keyword in the selected corpus.</div>`;
+      }
+
+      const body = rows.map((row) => `
+        <tr>
+          <td>${escapeHtml(row.position)}</td>
+          <td class="kwic-context" style="text-align:right;">${escapeHtml(row.left_context)}</td>
+          <td><span class="kwic-keyword">${escapeHtml(row.keyword)}</span></td>
+          <td class="kwic-context">${escapeHtml(row.right_context)}</td>
+        </tr>
+      `).join("");
+
+      return summary + `
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Position</th>
+                <th>Left Context</th>
+                <th>Keyword</th>
+                <th>Right Context</th>
+              </tr>
+            </thead>
+            <tbody>${body}</tbody>
+          </table>
+        </div>
+      `;
+    }
+
+    function buildNgramTable(result) {
+      const rows = result.rows || [];
+      const maxPmi = Math.max(...rows.map((row) => row.pmi_score || 0), 1);
+      const summary = `
+        <div class="summary-grid">
+          ${buildMetric("Analysis", "N-gram / Collocation")}
+          ${buildMetric("N Size", result.ngram_size || "-")}
+          ${buildMetric("Rows Shown", formatNumber(rows.length))}
+        </div>
+      `;
+
+      if (!rows.length) {
+        return summary + `<div class="empty-state">No n-grams met the frequency threshold for this corpus.</div>`;
+      }
+
+      const body = rows.map((row) => {
+        const left = Math.max(Math.min(((row.pmi_score || 0) / maxPmi) * 100, 100), 0);
+        return `
+          <tr>
+            <td><strong>${escapeHtml(row.ngram_text)}</strong></td>
+            <td>${formatNumber(row.frequency)}</td>
+            <td>${formatNumber(row.pmi_score || 0, 2)}</td>
+            <td>
+              <div class="scale">
+                <div class="scale-track"><div class="scale-marker" style="left:${left}%;"></div></div>
+              </div>
+            </td>
+          </tr>
+        `;
+      }).join("");
+
+      return summary + `
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>N-gram</th>
+                <th>Frequency</th>
+                <th>PMI Score</th>
+                <th>Strength Scale</th>
+              </tr>
+            </thead>
+            <tbody>${body}</tbody>
+          </table>
+        </div>
+      `;
+    }
+
+    function buildKeywordTable(result) {
+      const rows = result.rows || [];
+      const maxRatio = Math.max(...rows.map((row) => row.keyness_ratio || 0), 1);
+      const summary = `
+        <div class="summary-grid">
+          ${buildMetric("Analysis", "Keyword Comparison")}
+          ${buildMetric("Rows Shown", formatNumber(rows.length))}
+        </div>
+      `;
+
+      if (!rows.length) {
+        return summary + `<div class="empty-state">No distinctive keywords were identified between the selected corpora.</div>`;
+      }
+
+      const body = rows.map((row) => {
+        const width = ((row.keyness_ratio || 0) / maxRatio) * 100;
+        return `
+          <tr>
+            <td><strong>${escapeHtml(row.word)}</strong></td>
+            <td>${formatNumber(row.target_frequency)}</td>
+            <td>${formatNumber(row.reference_frequency)}</td>
+            <td>${formatNumber(row.keyness_ratio || 0, 2)}</td>
+            <td class="bar-cell">
+              <div class="bar-track"><div class="bar-fill" style="width:${width}%;"></div></div>
+            </td>
+          </tr>
+        `;
+      }).join("");
+
+      return summary + `
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Word</th>
+                <th>Target Freq.</th>
+                <th>Reference Freq.</th>
+                <th>Keyness Ratio</th>
+                <th>Relative Strength</th>
+              </tr>
+            </thead>
+            <tbody>${body}</tbody>
+          </table>
+        </div>
+      `;
+    }
+
+    function buildDynamicSummary(result) {
+      const payload = result.result || {};
+      return `
+        <div class="summary-grid">
+          ${buildMetric("Analysis", "Linguistic Fallback")}
+          ${buildMetric("Tokens", formatNumber(payload.token_count || 0))}
+          ${buildMetric("Unique Tokens", formatNumber(payload.unique_token_count || 0))}
+          ${buildMetric("Type-Token Ratio", formatNumber(payload.type_token_ratio || 0, 3))}
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Interpreted Query</th>
+                <th>Summary</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>${escapeHtml(payload.query_interpreted_as || "-")}</td>
+                <td>This analysis was generated through the safe linguistic fallback path and reduced to interpretable corpus statistics.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      `;
+    }
+
+    function renderResultContent(result) {
+      if (!result || !result.analysis_type) {
+        return `<div class="empty-state">The system returned no displayable result.</div>`;
+      }
+
+      if (result.analysis_type === "frequency") {
+        return buildFrequencyTable(result);
+      }
+      if (result.analysis_type === "kwic") {
+        return buildKwicTable(result);
+      }
+      if (result.analysis_type === "ngram_collocation") {
+        return buildNgramTable(result);
+      }
+      if (result.analysis_type === "keyword_comparison") {
+        return buildKeywordTable(result);
+      }
+      if (result.analysis_type === "dynamic_code") {
+        return buildDynamicSummary(result);
+      }
+
+      return `
+        <div class="empty-state">
+          This analysis type is not yet formatted for presentation.
+        </div>
+      `;
+    }
+
+    function getResultTitle(result) {
+      const map = {
+        frequency: "Frequency Analysis",
+        kwic: "Keywords in Context",
+        ngram_collocation: "Collocation and N-gram Analysis",
+        keyword_comparison: "Keyword Comparison",
+        dynamic_code: "Extended Linguistic Analysis",
+      };
+      return map[result?.analysis_type] || "Analysis Result";
+    }
+
+    function addResultCard(payload) {
+      if (!payload.safe) {
+        addErrorCard(payload.error || "This analysis could not be displayed safely.");
+        return;
+      }
+
+      const card = document.createElement("article");
+      card.className = "analysis-card";
+      const result = payload.result || {};
+      card.innerHTML = `
+        <div class="analysis-head">
+          <div>
+            <h3 class="analysis-title">${escapeHtml(getResultTitle(result))}</h3>
+            <p class="analysis-subtitle">Structured presentation generated for easier interpretation of corpus evidence.</p>
+          </div>
+          <div class="tag">Ready to Review</div>
+        </div>
+        <div class="analysis-body">
+          ${renderResultContent(result)}
+        </div>
+      `;
+      appendNode(card);
+    }
+
+    function addErrorCard(message) {
+      const card = document.createElement("article");
+      card.className = "error-card";
+      card.innerHTML = `
+        <div class="error-head">
+          <div>
+            <h3 class="error-title">Analysis Blocked</h3>
+          </div>
+          <div class="tag" style="background:rgba(255,110,110,0.14); color:#ffc4c4; border-color:rgba(255,110,110,0.22);">Not Displayed</div>
+        </div>
+        <div class="error-body">
+          <div class="empty-state" style="border-style:solid; color:#f1c9c9;">
+            ${escapeHtml(message)}
+          </div>
+        </div>
+      `;
+      appendNode(card);
+    }
+
+    function renderProjects(corpora) {
+      projectList.innerHTML = "";
+      corpusSelect.innerHTML = "";
+      referenceSelect.innerHTML = "<option value=''>No reference corpus</option>";
+
+      for (const corpus of corpora) {
+        const li = document.createElement("li");
+        li.className = "project-item";
+        li.textContent = corpus;
+        li.addEventListener("click", () => {
+          corpusSelect.value = corpus;
+          [...projectList.children].forEach((item) => item.classList.remove("active"));
+          li.classList.add("active");
+        });
+        projectList.appendChild(li);
+
+        const option = document.createElement("option");
+        option.value = corpus;
+        option.textContent = corpus;
+        corpusSelect.appendChild(option);
+
+        const refOption = document.createElement("option");
+        refOption.value = corpus;
+        refOption.textContent = corpus;
+        referenceSelect.appendChild(refOption);
+      }
+
+      if (corpusSelect.options.length === 0) {
+        corpusSelect.innerHTML = "<option value=''>Upload corpus first</option>";
+      } else if (projectList.firstElementChild) {
+        projectList.firstElementChild.classList.add("active");
+      }
+    }
+
+    async function refreshCorpora() {
+      const response = await fetch("/api/corpora");
+      const data = await response.json();
+      renderProjects(data.corpora || []);
+    }
+
+    uploadButton.addEventListener("click", () => fileInput.click());
+
+    fileInput.addEventListener("change", async () => {
+      const file = fileInput.files[0];
+      if (!file) return;
+
+      const formData = new FormData();
+      formData.append("file", file);
+
+      addBubble(`Uploading ${file.name}...`, "user");
+      const response = await fetch("/api/upload", { method: "POST", body: formData });
+      const data = await response.json();
+      if (response.ok) {
+        addBubble(`Corpus ready: ${data.corpus_id}`);
+        if (data.rag_warning) {
+          addBubble(data.rag_warning);
+        }
+        await refreshCorpora();
+      } else {
+        addErrorCard(data.error || "Upload failed.");
+      }
+      fileInput.value = "";
+    });
+
+    sendButton.addEventListener("click", async () => {
+      const question = queryInput.value.trim();
+      const corpus_id = corpusSelect.value;
+      const reference_corpus_id = referenceSelect.value;
+
+      if (!question || !corpus_id) {
+        addErrorCard("Choose a corpus and enter an analysis question first.");
+        return;
+      }
+
+      addBubble(question, "user");
+      queryInput.value = "";
+
+      const response = await fetch("/api/query", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ question, corpus_id, reference_corpus_id }),
+      });
+      const data = await response.json();
+      addResultCard(data);
+    });
+
+    refreshCorpora();
+  </script>
+</body>
+</html>
