@@ -30,6 +30,26 @@ def home():
 def health():
     return jsonify({"status": "ok"})
 
+@main.route("/api/models", methods=["GET"])
+def list_models():
+    from agents._shared import AVAILABLE_MODELS, get_model
+    return jsonify({"models": AVAILABLE_MODELS, "current": get_model()})
+
+@main.route("/api/models/select", methods=["POST"])
+def select_model():
+    from agents._shared import AVAILABLE_MODELS, set_model
+    from agents.coordination_agent import CoordinationAgent
+    from agents.rag_agent import RAGAgent
+    payload = request.get_json(silent=True) or {}
+    model = payload.get("model", "").strip()
+    if not model or model not in AVAILABLE_MODELS:
+        return jsonify({"error": f"Invalid model. Choose from: {AVAILABLE_MODELS}"}), 400
+    set_model(model)
+    # Reinitialise agents so they pick up the new model
+    current_app.rag_agent = RAGAgent(model=model)
+    current_app.coordination_agent = CoordinationAgent()
+    return jsonify({"message": f"Model switched to {model}. All agents reloaded."})
+
 @main.route("/api/upload", methods=["POST"])
 def upload():
     if "file" not in request.files:
@@ -277,6 +297,14 @@ def _persist_analysis_specific_rows(db, result_id: int, result_payload: dict) ->
 
 def _build_client_success_response(orchestrated: dict) -> dict:
     result = orchestrated.get("result") or {}
+    # Conversational responses are surfaced as a plain message
+    if result.get("analysis_type") == "conversational":
+        return {
+            "safe": True,
+            "conversational": True,
+            "reply": result.get("reply", ""),
+            "result": result,
+        }
     return {
         "safe": True,
         "result": result,

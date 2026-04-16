@@ -2,11 +2,16 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_chroma import Chroma
 from langchain_ollama import OllamaEmbeddings, ChatOllama
 
+from agents._shared import get_model
+
 
 class RAGAgent:
-    def __init__(self):
-        self.embeddings = OllamaEmbeddings(model="llama3")
-        self.llm = ChatOllama(model="llama3")
+    def __init__(self, model: str = None):
+        if model is None:
+            model = get_model()
+        self.model = model
+        self.embeddings = OllamaEmbeddings(model=model)
+        self.llm = ChatOllama(model=model)
 
         self.vectorstore = Chroma(
             persist_directory="./chroma_db",

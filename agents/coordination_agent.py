@@ -1,8 +1,21 @@
+"""
+CoordinationAgent — LangGraph supervisor that routes natural language queries
+to specialist AI agents via message passing.
+
+Graph flow:
+  START → router → [frequency | kwic | ngram | keyword | conversational | dynamic] → validator → END
+"""
 from __future__ import annotations
 
+import json
 import re
-from typing import Any
+from typing import Any, Literal, TypedDict
 
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
+from langchain_ollama import ChatOllama
+from langgraph.graph import END, START, StateGraph
+
+from agents._shared import get_model
 from agents.frequency_agent import FrequencyAgent
 from agents.keyword_agent import KeywordAgent
 from agents.kwic_agent import KWICAgent
@@ -11,16 +24,322 @@ from agents.validation_agent import ValidationAgent
 from services.code_execution_service import SafeCodeExecutionService
 
 
+# ---------------------------------------------------------------------------
+# Shared graph state
+# ---------------------------------------------------------------------------
+
+class AgentState(TypedDict):
+    query: str
+    tokens: list[str]
+    reference_tokens: list[str] | None
+    corpus_text: str
+    # routing decision made by the router node
+    route: str
+    # extracted parameters for specialist agents
+    params: dict[str, Any]
+    # result from specialist agent
+    result: dict[str, Any] | None
+    # validation report
+    validation: dict[str, Any]
+    # final safe flag
+    safe: bool
+    # conversational reply (when out of scope or chat)
+    reply: str | None
+    # message history passed between nodes
+    messages: list[BaseMessage]
+
+
+# ---------------------------------------------------------------------------
+# Router prompt & node
+# ---------------------------------------------------------------------------
+
+ROUTER_SYSTEM = """You are the Routing Agent for ACAS (Academic Corpus Analysis System).
+Your job is to classify the user's query into exactly one of these categories:
+
+- frequency     : Word frequency / most common words
+- kwic          : Keyword-in-context / concordance lines / occurrences of a word
+- ngram         : N-grams / bigrams / trigrams / collocations
+- keyword       : Keyword comparison / keyness / comparing two corpora
+- conversational: Greetings, help requests, questions about ACAS capabilities
+- out_of_scope  : Anything unrelated to corpus linguistic analysis
+
+Respond with ONLY the category label (one word, lowercase). No explanation."""
+
+ROUTER_EXAMPLES = """Examples:
+"show me the most frequent words" → frequency
+"find concordances for 'justice'" → kwic
+"what are the top bigrams?" → ngram
+"compare keywords with the reference corpus" → keyword
+"hello" → conversational
+"what can you do?" → conversational
+"write me a poem" → out_of_scope
+"what's the weather?" → out_of_scope"""
+
+CONVERSATIONAL_SYSTEM = """You are ACAS — the Academic Corpus Analysis System.
+You help linguists and researchers analyse text corpora.
+
+You can perform:
+• Frequency analysis — most common words and their distribution
+• KWIC (Keyword-in-Context) — concordance lines showing a word in context
+• N-gram / Collocation analysis — frequent word combinations with PMI scores
+• Keyword comparison — identifying distinctive words vs a reference corpus
+
+For greetings and capability questions, respond warmly and helpfully.
+For requests outside corpus analysis (poems, code, general chat), politely redirect the user."""
+
+PARAM_EXTRACT_SYSTEM = """You are a parameter extraction assistant. Given a user's corpus analysis query,
+extract the relevant parameters as a JSON object.
+
+For frequency: {"top_k": <int, default 20>, "exclude_stopwords": <bool, default true>}
+For kwic: {"keyword": "<word to search>", "window_size": <int, default 5>, "max_results": <int, default 50>}
+For ngram: {"n_size": <int, default 2>, "min_frequency": <int, default 2>, "top_k": <int, default 20>}
+For keyword: {"top_k": <int, default 20>, "min_frequency": <int, default 2>}
+
+Return ONLY the JSON object, no explanation."""
+
+
+def _build_router_node(llm: ChatOllama):
+    def router_node(state: AgentState) -> AgentState:
+        messages = [
+            SystemMessage(content=ROUTER_SYSTEM + "\n\n" + ROUTER_EXAMPLES),
+            HumanMessage(content=state["query"]),
+        ]
+        response = llm.invoke(messages)
+        route = response.content.strip().lower()
+
+        # Normalise to known routes
+        valid_routes = {"frequency", "kwic", "ngram", "keyword", "conversational", "out_of_scope"}
+        if route not in valid_routes:
+            # Let the LLM's intent guide a best-guess
+            for candidate in valid_routes:
+                if candidate in route:
+                    route = candidate
+                    break
+            else:
+                route = "out_of_scope"
+
+        # Extract parameters with a second LLM call for analysis routes
+        params: dict[str, Any] = {}
+        if route in {"frequency", "kwic", "ngram", "keyword"}:
+            param_messages = [
+                SystemMessage(content=PARAM_EXTRACT_SYSTEM),
+                HumanMessage(content=f"Route: {route}\nQuery: {state['query']}"),
+            ]
+            param_response = llm.invoke(param_messages)
+            try:
+                raw = param_response.content.strip()
+                match = re.search(r"\{.*\}", raw, re.DOTALL)
+                if match:
+                    params = json.loads(match.group())
+            except (json.JSONDecodeError, TypeError):
+                params = {}
+
+        new_messages = list(state["messages"]) + [
+            HumanMessage(content=state["query"]),
+            AIMessage(content=f"[Router] Classified as: {route}. Params: {json.dumps(params)}"),
+        ]
+        return {**state, "route": route, "params": params, "messages": new_messages}
+
+    return router_node
+
+
+# ---------------------------------------------------------------------------
+# Specialist agent nodes
+# ---------------------------------------------------------------------------
+
+def _build_frequency_node(agent: FrequencyAgent):
+    def frequency_node(state: AgentState) -> AgentState:
+        params = state.get("params", {})
+        result = agent.analyze(
+            tokens=state["tokens"],
+            top_k=params.get("top_k", 20),
+            exclude_stopwords=params.get("exclude_stopwords", True),
+        )
+        new_messages = list(state["messages"]) + [
+            AIMessage(content=f"[FrequencyAgent] Analysis complete. Found {len(result.get('rows', []))} rows."),
+        ]
+        return {**state, "result": result, "messages": new_messages}
+    return frequency_node
+
+
+def _build_kwic_node(agent: KWICAgent):
+    def kwic_node(state: AgentState) -> AgentState:
+        params = state.get("params", {})
+        keyword = params.get("keyword", "")
+        if not keyword:
+            # Fallback: extract last quoted word or last word from query
+            quoted = re.search(r"['\"]([^'\"]+)['\"]", state["query"])
+            keyword = quoted.group(1) if quoted else re.findall(r"[a-zA-Z']+", state["query"])[-1]
+        result = agent.analyze(
+            tokens=state["tokens"],
+            keyword=keyword,
+            window_size=params.get("window_size", 5),
+            max_results=params.get("max_results", 50),
+        )
+        new_messages = list(state["messages"]) + [
+            AIMessage(content=f"[KWICAgent] Found {len(result.get('matches', []))} concordance lines for '{keyword}'."),
+        ]
+        return {**state, "result": result, "messages": new_messages}
+    return kwic_node
+
+
+def _build_ngram_node(agent: NgramAgent):
+    def ngram_node(state: AgentState) -> AgentState:
+        params = state.get("params", {})
+        result = agent.analyze(
+            tokens=state["tokens"],
+            n_size=params.get("n_size", 2),
+            min_frequency=params.get("min_frequency", 2),
+            top_k=params.get("top_k", 20),
+        )
+        new_messages = list(state["messages"]) + [
+            AIMessage(content=f"[NgramAgent] Found {len(result.get('rows', []))} collocations."),
+        ]
+        return {**state, "result": result, "messages": new_messages}
+    return ngram_node
+
+
+def _build_keyword_node(agent: KeywordAgent):
+    def keyword_node(state: AgentState) -> AgentState:
+        if not state.get("reference_tokens"):
+            result = None
+            validation = {
+                "safe": False,
+                "issues": ["Keyword comparison requires a reference corpus. Please select one."],
+                "warnings": [],
+            }
+            return {**state, "result": result, "validation": validation, "safe": False}
+
+        params = state.get("params", {})
+        result = agent.analyze(
+            target_tokens=state["tokens"],
+            reference_tokens=state["reference_tokens"],
+            top_k=params.get("top_k", 20),
+            min_frequency=params.get("min_frequency", 2),
+        )
+        new_messages = list(state["messages"]) + [
+            AIMessage(content=f"[KeywordAgent] Comparison complete. {len(result.get('rows', []))} keywords found."),
+        ]
+        return {**state, "result": result, "messages": new_messages}
+    return keyword_node
+
+
+def _build_conversational_node(llm: ChatOllama):
+    def conversational_node(state: AgentState) -> AgentState:
+        messages = [
+            SystemMessage(content=CONVERSATIONAL_SYSTEM),
+            HumanMessage(content=state["query"]),
+        ]
+        response = llm.invoke(messages)
+        reply = response.content.strip()
+        new_messages = list(state["messages"]) + [
+            AIMessage(content=f"[ConversationalAgent] {reply}"),
+        ]
+        return {**state, "result": None, "reply": reply, "safe": True, "messages": new_messages}
+    return conversational_node
+
+
+def _build_out_of_scope_node(llm: ChatOllama):
+    def out_of_scope_node(state: AgentState) -> AgentState:
+        messages = [
+            SystemMessage(content=CONVERSATIONAL_SYSTEM),
+            HumanMessage(content=(
+                f"The user asked: '{state['query']}'\n\n"
+                "This is outside the scope of corpus linguistic analysis. "
+                "Politely explain what ACAS is designed for and suggest relevant query types they could try instead."
+            )),
+        ]
+        response = llm.invoke(messages)
+        reply = response.content.strip()
+        new_messages = list(state["messages"]) + [
+            AIMessage(content=f"[OutOfScopeAgent] {reply}"),
+        ]
+        return {**state, "result": None, "reply": reply, "safe": True, "messages": new_messages}
+    return out_of_scope_node
+
+
+# ---------------------------------------------------------------------------
+# Validation node
+# ---------------------------------------------------------------------------
+
+def _build_validation_node(agent: ValidationAgent):
+    def validation_node(state: AgentState) -> AgentState:
+        if state.get("result") is None:
+            # Conversational / out-of-scope — already handled
+            return state
+        validation = agent.validate_result(state["result"])
+        new_messages = list(state["messages"]) + [
+            AIMessage(content=f"[ValidationAgent] Safe={validation['safe']}. Issues: {validation.get('issues', [])}."),
+        ]
+        return {**state, "validation": validation, "safe": validation["safe"], "messages": new_messages}
+    return validation_node
+
+
+# ---------------------------------------------------------------------------
+# Routing edge function
+# ---------------------------------------------------------------------------
+
+def _route_edge(state: AgentState) -> Literal["frequency", "kwic", "ngram", "keyword", "conversational", "out_of_scope"]:
+    return state["route"]
+
+
+# ---------------------------------------------------------------------------
+# CoordinationAgent
+# ---------------------------------------------------------------------------
+
 class CoordinationAgent:
-    """Interprets natural language and dispatches the right analysis agent."""
+    """LangGraph supervisor that routes queries to specialist AI agents."""
 
     def __init__(self) -> None:
-        self.frequency_agent = FrequencyAgent()
-        self.kwic_agent = KWICAgent()
-        self.ngram_agent = NgramAgent()
-        self.keyword_agent = KeywordAgent()
-        self.validation_agent = ValidationAgent()
-        self.code_runner = SafeCodeExecutionService()
+        llm = ChatOllama(model=get_model())
+
+        self._frequency_agent = FrequencyAgent()
+        self._kwic_agent = KWICAgent()
+        self._ngram_agent = NgramAgent()
+        self._keyword_agent = KeywordAgent()
+        self._validation_agent = ValidationAgent()
+        self._code_runner = SafeCodeExecutionService()
+
+        # Build graph
+        graph = StateGraph(AgentState)
+
+        graph.add_node("router", _build_router_node(llm))
+        graph.add_node("frequency", _build_frequency_node(self._frequency_agent))
+        graph.add_node("kwic", _build_kwic_node(self._kwic_agent))
+        graph.add_node("ngram", _build_ngram_node(self._ngram_agent))
+        graph.add_node("keyword", _build_keyword_node(self._keyword_agent))
+        graph.add_node("conversational", _build_conversational_node(llm))
+        graph.add_node("out_of_scope", _build_out_of_scope_node(llm))
+        graph.add_node("validator", _build_validation_node(self._validation_agent))
+
+        graph.add_edge(START, "router")
+        graph.add_conditional_edges("router", _route_edge)
+        graph.add_edge("frequency", "validator")
+        graph.add_edge("kwic", "validator")
+        graph.add_edge("ngram", "validator")
+        graph.add_edge("keyword", "validator")
+        graph.add_edge("conversational", END)
+        graph.add_edge("out_of_scope", END)
+        graph.add_edge("validator", END)
+
+        self._graph = graph.compile()
+
+    def route_query(self, query: str) -> str:
+        """Return only the routing decision for a query (no specialist execution)."""
+        llm = ChatOllama(model=get_model())
+        messages = [
+            SystemMessage(content=ROUTER_SYSTEM + "\n\n" + ROUTER_EXAMPLES),
+            HumanMessage(content=query),
+        ]
+        response = llm.invoke(messages)
+        route = response.content.strip().lower()
+        valid_routes = {"frequency", "kwic", "ngram", "keyword", "conversational", "out_of_scope"}
+        if route not in valid_routes:
+            for candidate in valid_routes:
+                if candidate in route:
+                    return candidate
+            return "out_of_scope"
+        return route
 
     def execute(
         self,
@@ -29,122 +348,37 @@ class CoordinationAgent:
         reference_tokens: list[str] | None = None,
         corpus_text: str = "",
     ) -> dict[str, Any]:
-        normalized = query.lower().strip()
-
-        if self._is_frequency_request(normalized):
-            top_k = self._extract_int(normalized, default=20)
-            result = self.frequency_agent.analyze(tokens=tokens, top_k=top_k)
-        elif self._is_kwic_request(normalized):
-            keyword = self._extract_keyword(normalized)
-            window = self._extract_window_size(normalized)
-            result = self.kwic_agent.analyze(tokens=tokens, keyword=keyword, window_size=window)
-        elif self._is_ngram_request(normalized):
-            n_value = self._extract_ngram_size(normalized)
-            result = self.ngram_agent.analyze(tokens=tokens, n_size=n_value)
-        elif self._is_keyword_comparison_request(normalized):
-            if not reference_tokens:
-                return {
-                    "safe": False,
-                    "validation": {
-                        "safe": False,
-                        "issues": ["Keyword analysis requires a reference corpus."],
-                        "warnings": [],
-                    },
-                    "result": None,
-                }
-            result = self.keyword_agent.analyze(
-                target_tokens=tokens,
-                reference_tokens=reference_tokens,
-            )
-        elif self._looks_linguistic(normalized):
-            dynamic_code = self._build_dynamic_linguistic_snippet(normalized, corpus_text)
-            result = self.code_runner.execute(dynamic_code)
-        else:
-            return {
-                "safe": False,
-                "validation": {
-                    "safe": False,
-                    "issues": [
-                        "Query is out of ACAS scope. Please ask for corpus linguistic analysis."
-                    ],
-                    "warnings": [],
-                },
-                "result": None,
-            }
-
-        validation = self.validation_agent.validate_result(result)
-        return {
-            "safe": validation["safe"],
-            "validation": validation,
-            "result": result,
+        initial_state: AgentState = {
+            "query": query,
+            "tokens": tokens,
+            "reference_tokens": reference_tokens,
+            "corpus_text": corpus_text,
+            "route": "",
+            "params": {},
+            "result": None,
+            "validation": {"safe": True, "issues": [], "warnings": []},
+            "safe": True,
+            "reply": None,
+            "messages": [],
         }
 
-    def _is_frequency_request(self, query: str) -> bool:
-        return "frequency" in query or "frequent words" in query
+        final_state = self._graph.invoke(initial_state)
 
-    def _is_kwic_request(self, query: str) -> bool:
-        return "kwic" in query or "concordance" in query or "context" in query
+        # Conversational / out-of-scope: return reply as result
+        if final_state.get("reply"):
+            return {
+                "route": final_state["route"],
+                "safe": True,
+                "result": {
+                    "analysis_type": "conversational",
+                    "reply": final_state["reply"],
+                },
+                "validation": {"safe": True, "issues": [], "warnings": []},
+            }
 
-    def _is_ngram_request(self, query: str) -> bool:
-        return "ngram" in query or "n-gram" in query or "collocation" in query or "bigram" in query or "trigram" in query
-
-    def _is_keyword_comparison_request(self, query: str) -> bool:
-        return "keyword" in query and "reference" in query or "compare corpus" in query
-
-    def _looks_linguistic(self, query: str) -> bool:
-        lexical_triggers = [
-            "token",
-            "lemma",
-            "pos",
-            "part of speech",
-            "syntax",
-            "semantic",
-            "phrase",
-            "linguistic",
-            "corpus",
-        ]
-        return any(trigger in query for trigger in lexical_triggers)
-
-    def _extract_int(self, query: str, default: int) -> int:
-        match = re.search(r"\b(\d+)\b", query)
-        return int(match.group(1)) if match else default
-
-    def _extract_window_size(self, query: str) -> int:
-        match = re.search(r"(\d+)\s*[- ]?word", query)
-        return int(match.group(1)) if match else 5
-
-    def _extract_ngram_size(self, query: str) -> int:
-        if "trigram" in query:
-            return 3
-        if "bigram" in query:
-            return 2
-        match = re.search(r"(\d+)\s*[- ]?gram", query)
-        if match:
-            return max(int(match.group(1)), 2)
-        return 2
-
-    def _extract_keyword(self, query: str) -> str:
-        quoted = re.search(r"['\"]([^'\"]+)['\"]", query)
-        if quoted:
-            return quoted.group(1).strip().lower()
-
-        tokenized = re.findall(r"[a-zA-Z']+", query)
-        fallback = tokenized[-1] if tokenized else ""
-        return fallback.lower()
-
-    def _build_dynamic_linguistic_snippet(self, query: str, corpus_text: str) -> str:
-        # Kept intentionally constrained: only pure text computations.
-        safe_text = corpus_text.replace("\\", "\\\\").replace("'", "\\'")
-        safe_query = query.replace("\\", "\\\\").replace("'", "\\'")
-        return (
-            f"text = '{safe_text[:50000]}'\n"
-            f"query = '{safe_query}'\n"
-            "tokens = [t for t in text.lower().split() if t]\n"
-            "unique_tokens = len(set(tokens))\n"
-            "result = {\n"
-            "  'query_interpreted_as': query,\n"
-            "  'token_count': len(tokens),\n"
-            "  'unique_token_count': unique_tokens,\n"
-            "  'type_token_ratio': (unique_tokens / len(tokens)) if tokens else 0.0\n"
-            "}\n"
-        )
+        return {
+            "route": final_state["route"],
+            "safe": final_state["safe"],
+            "result": final_state["result"],
+            "validation": final_state["validation"],
+        }
