@@ -208,13 +208,12 @@ __marimo__/
 
 # --- ACAS Project Specific ---
 chroma_db/
-data/*.txt
-data/*.pdf
-data/*.docx
+data/
 
 # Local development artifacts
 *.sqlite3
 *.db
+corpus_system.db
 
 # Logs
 logs/

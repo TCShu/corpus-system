@@ -1,159 +1,63 @@
+"""
+ValidationAgent — deterministic watchdog for ACAS analysis results.
+
+Responsibilities:
+  - Verify structural correctness (required fields, correct types)
+  - Check data integrity (non-negative values, minimum sizes)
+  - Confirm the result is safe and sensible to display
+  - Return {safe, issues, warnings} without generating new content
+
+No LLM inference is used. Validation is fully deterministic so it
+cannot hallucinate, stall, or accidentally produce a second answer.
+"""
 from __future__ import annotations
 
-import json
-import re
 from typing import Any
-
-from langchain_core.messages import HumanMessage, SystemMessage
-from langchain_core.tools import tool
-from langchain_ollama import ChatOllama
-from langgraph.prebuilt import create_react_agent
-
-from agents._shared import get_model
-
-
-# ---------------------------------------------------------------------------
-# Tools
-# ---------------------------------------------------------------------------
-
-def _make_tools(result: dict[str, Any]):
-    @tool
-    def validate_analysis_result() -> str:
-        """Validate the structure and integrity of an analysis result produced by a specialist agent.
-        Checks for required fields, negative values, and structural correctness.
-        """
-        issues: list[str] = []
-        warnings: list[str] = []
-
-        if not isinstance(result, dict):
-            return json.dumps({"safe": False, "issues": ["Result payload is not a dictionary."], "warnings": []})
-
-        analysis_type = result.get("analysis_type")
-        if not analysis_type:
-            issues.append("Missing analysis_type field.")
-
-        if analysis_type == "frequency":
-            rows = result.get("rows")
-            if not isinstance(rows, list):
-                issues.append("Frequency result rows must be a list.")
-            else:
-                for row in rows:
-                    if row.get("frequency", 0) < 0:
-                        issues.append("Frequency cannot be negative.")
-
-        elif analysis_type == "kwic":
-            matches = result.get("matches")
-            if not isinstance(matches, list):
-                issues.append("KWIC matches must be a list.")
-            else:
-                for match in matches:
-                    if "keyword" not in match:
-                        issues.append("KWIC match missing keyword.")
-                        break
-
-        elif analysis_type == "ngram_collocation":
-            rows = result.get("rows")
-            if not isinstance(rows, list):
-                issues.append("N-gram rows must be a list.")
-            else:
-                for row in rows:
-                    if row.get("ngram_size", 0) < 2:
-                        issues.append("N-gram size must be >= 2.")
-                        break
-
-        elif analysis_type == "keyword_comparison":
-            rows = result.get("rows")
-            if not isinstance(rows, list):
-                issues.append("Keyword rows must be a list.")
-            else:
-                for row in rows:
-                    if row.get("keyness_ratio", 0) < 0:
-                        issues.append("Keyness ratio cannot be negative.")
-                        break
-
-        elif analysis_type == "dynamic_code":
-            metadata = result.get("metadata", {})
-            if not isinstance(metadata, dict):
-                issues.append("Dynamic metadata must be a dictionary.")
-            else:
-                if not metadata.get("executed_in_container", False):
-                    issues.append("Dynamic code was not executed in a container.")
-                if metadata.get("validator_notes"):
-                    warnings.append(metadata["validator_notes"])
-
-        else:
-            warnings.append(f"Unknown analysis type '{analysis_type}'.")
-
-        return json.dumps({"safe": len(issues) == 0, "issues": issues, "warnings": warnings})
-
-    return [validate_analysis_result]
-
-
-# ---------------------------------------------------------------------------
-# Agent
-# ---------------------------------------------------------------------------
-
-SYSTEM_PROMPT = """You are the Validation Agent for ACAS (WatchDog).
-Your job is to validate analysis results produced by other agents before they are shown to users.
-You check for structural correctness, missing fields, and data integrity violations.
-Always call the validate_analysis_result tool and return its JSON output exactly."""
 
 
 class ValidationAgent:
-    def __init__(self):
-        self.llm = ChatOllama(model=get_model())
 
     def validate_result(self, result: dict[str, Any]) -> dict[str, Any]:
-        tools = _make_tools(result)
-        agent = create_react_agent(self.llm, tools)
-
-        messages = [
-            SystemMessage(content=SYSTEM_PROMPT),
-            HumanMessage(content=f"Validate this analysis result and return the validation report: {json.dumps(result)[:500]}"),
-        ]
-
-        try:
-            agent_result = agent.invoke({"messages": messages})
-            last_message = agent_result["messages"][-1].content
-        except Exception:
-            return self._fallback_validate(result)
-
-        try:
-            return json.loads(last_message)
-        except (json.JSONDecodeError, TypeError):
-            match = re.search(r"\{.*\}", last_message, re.DOTALL)
-            if match:
-                return json.loads(match.group())
-            return self._fallback_validate(result)
-
-    def _fallback_validate(self, result: dict[str, Any]) -> dict[str, Any]:
         issues: list[str] = []
         warnings: list[str] = []
 
         if not isinstance(result, dict):
-            return {"safe": False, "issues": ["Result payload is not a dictionary."], "warnings": []}
+            return {
+                "safe": False,
+                "issues": ["Result payload is not a dictionary."],
+                "warnings": [],
+            }
 
         analysis_type = result.get("analysis_type")
         if not analysis_type:
-            issues.append("Missing analysis_type field.")
+            return {
+                "safe": False,
+                "issues": ["Missing analysis_type field."],
+                "warnings": [],
+            }
 
         if analysis_type == "frequency":
             rows = result.get("rows")
             if not isinstance(rows, list):
                 issues.append("Frequency result rows must be a list.")
             else:
+                if not rows:
+                    warnings.append("Frequency result contains no rows.")
                 for row in rows:
                     if row.get("frequency", 0) < 0:
-                        issues.append("Frequency cannot be negative.")
+                        issues.append("Frequency value cannot be negative.")
+                        break
 
         elif analysis_type == "kwic":
             matches = result.get("matches")
             if not isinstance(matches, list):
                 issues.append("KWIC matches must be a list.")
             else:
+                if not matches:
+                    warnings.append("No concordance lines found for this keyword.")
                 for match in matches:
                     if "keyword" not in match:
-                        issues.append("KWIC match missing keyword.")
+                        issues.append("KWIC match is missing the keyword field.")
                         break
 
         elif analysis_type == "ngram_collocation":
@@ -161,16 +65,20 @@ class ValidationAgent:
             if not isinstance(rows, list):
                 issues.append("N-gram rows must be a list.")
             else:
+                if not rows:
+                    warnings.append("No n-grams met the minimum frequency threshold.")
                 for row in rows:
-                    if row.get("ngram_size", 0) < 2:
-                        issues.append("N-gram size must be >= 2.")
+                    if row.get("ngram_size", 2) < 2:
+                        issues.append("N-gram size must be at least 2.")
                         break
 
         elif analysis_type == "keyword_comparison":
             rows = result.get("rows")
             if not isinstance(rows, list):
-                issues.append("Keyword rows must be a list.")
+                issues.append("Keyword comparison rows must be a list.")
             else:
+                if not rows:
+                    warnings.append("No distinctive keywords found between the two corpora.")
                 for row in rows:
                     if row.get("keyness_ratio", 0) < 0:
                         issues.append("Keyness ratio cannot be negative.")
@@ -179,14 +87,27 @@ class ValidationAgent:
         elif analysis_type == "dynamic_code":
             metadata = result.get("metadata", {})
             if not isinstance(metadata, dict):
-                issues.append("Dynamic metadata must be a dictionary.")
+                issues.append("Dynamic code metadata must be a dictionary.")
             else:
                 if not metadata.get("executed_in_container", False):
-                    issues.append("Dynamic code was not executed in a container.")
+                    issues.append(
+                        "Dynamic code was not executed in a sandboxed container."
+                    )
                 if metadata.get("validator_notes"):
                     warnings.append(metadata["validator_notes"])
 
-        else:
-            warnings.append(f"Unknown analysis type '{analysis_type}'.")
+        elif analysis_type == "conversational":
+            reply = result.get("reply", "")
+            if not reply or not reply.strip():
+                issues.append("Conversational result has an empty reply.")
 
-        return {"safe": len(issues) == 0, "issues": issues, "warnings": warnings}
+        else:
+            warnings.append(
+                f"Unrecognised analysis type '{analysis_type}' — result not fully validated."
+            )
+
+        return {
+            "safe": len(issues) == 0,
+            "issues": issues,
+            "warnings": warnings,
+        }

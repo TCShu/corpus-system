@@ -11,32 +11,50 @@ class _FallbackRAGAgent:
 
     def query(self, question, corpus_id):
         return (
-            "RAG agent is unavailable because Ollama/embedding services are not configured. "
+            "RAG agent is unavailable — Ollama/embedding services are not configured. "
             "Core corpus analysis agents remain available."
         )
+
+
+class _FallbackCoordinationAgent:
+    def execute(self, query, tokens, reference_tokens=None, corpus_text=""):
+        return {
+            "route": "out_of_scope",
+            "safe": False,
+            "result": None,
+            "validation": {
+                "safe": False,
+                "issues": ["Coordination agent could not start. Check that Ollama is running."],
+                "warnings": [],
+            },
+        }
+
+    def route_query(self, query):
+        return "out_of_scope"
 
 
 def create_app():
     app = Flask(
         __name__,
-        template_folder="../frontend/templates",
-        static_folder="../frontend/static",
+        template_folder="../templates",
+        static_folder="../static",
         static_url_path="/static",
     )
     app.config["UPLOAD_FOLDER"] = "data"
 
     initialize_database()
-    data_agent = DataAccessAgent()
-    try:
-        rag_agent = RAGAgent()
-    except Exception:
-        rag_agent = _FallbackRAGAgent()
-    coordination_agent = CoordinationAgent()
 
-    # Save to app context
-    app.data_agent = data_agent
-    app.rag_agent = rag_agent
-    app.coordination_agent = coordination_agent
+    app.data_agent = DataAccessAgent()
+
+    try:
+        app.rag_agent = RAGAgent()
+    except Exception:
+        app.rag_agent = _FallbackRAGAgent()
+
+    try:
+        app.coordination_agent = CoordinationAgent()
+    except Exception:
+        app.coordination_agent = _FallbackCoordinationAgent()
 
     from .routes import main
     app.register_blueprint(main)

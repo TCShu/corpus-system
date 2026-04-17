@@ -1,7 +1,13 @@
 from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey, Boolean, JSON, Float
+
+try:
+    from pgvector.sqlalchemy import Vector as _PGVector
+    _VECTOR_TYPE = _PGVector
+except ImportError:
+    _VECTOR_TYPE = None
+
 from sqlalchemy.orm import relationship, declarative_base
 from datetime import datetime, timezone
-from pgvector.sqlalchemy import Vector
 
 Base = declarative_base()
 
@@ -205,8 +211,47 @@ class VectorEmbedding(Base):
     embedding_id = Column(Integer, primary_key=True)
     chunk_id = Column(Integer, ForeignKey("document_chunks.chunk_id"))
 
-    embedding_vector = Column(Vector(1536).with_variant(JSON, "sqlite"))
+    embedding_vector = Column(
+        _VECTOR_TYPE(1536).with_variant(JSON, "sqlite") if _VECTOR_TYPE else JSON
+    )
     model_used = Column(String(100))
 
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     chunk = relationship("DocumentChunk", back_populates="embeddings")
+
+
+# -----------------------
+# Conversations
+# -----------------------
+class Conversation(Base):
+    __tablename__ = "conversations"
+
+    conversation_id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.user_id"))
+    title = Column(String(500))
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+    messages = relationship(
+        "ConversationMessage",
+        back_populates="conversation",
+        cascade="all, delete-orphan",
+        order_by="ConversationMessage.created_at",
+    )
+
+
+# -----------------------
+# Conversation Messages
+# -----------------------
+class ConversationMessage(Base):
+    __tablename__ = "conversation_messages"
+
+    message_id = Column(Integer, primary_key=True)
+    conversation_id = Column(Integer, ForeignKey("conversations.conversation_id"))
+    role = Column(String(20))           # "user" or "assistant"
+    content = Column(Text)
+    analysis_type = Column(String(100))
+    result_data = Column(JSON)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+    conversation = relationship("Conversation", back_populates="messages")

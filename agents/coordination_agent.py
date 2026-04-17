@@ -3,7 +3,9 @@ CoordinationAgent — LangGraph supervisor that routes natural language queries
 to specialist AI agents via message passing.
 
 Graph flow:
-  START → router → [frequency | kwic | ngram | keyword | conversational | dynamic] → validator → END
+  START → router → [frequency | kwic | ngram | keyword | conversational | out_of_scope]
+                 → validator (for analysis routes only)
+                 → END
 """
 from __future__ import annotations
 
@@ -21,7 +23,6 @@ from agents.keyword_agent import KeywordAgent
 from agents.kwic_agent import KWICAgent
 from agents.ngram_agent import NgramAgent
 from agents.validation_agent import ValidationAgent
-from services.code_execution_service import SafeCodeExecutionService
 
 
 # ---------------------------------------------------------------------------
@@ -33,20 +34,91 @@ class AgentState(TypedDict):
     tokens: list[str]
     reference_tokens: list[str] | None
     corpus_text: str
-    # routing decision made by the router node
     route: str
-    # extracted parameters for specialist agents
     params: dict[str, Any]
-    # result from specialist agent
     result: dict[str, Any] | None
-    # validation report
     validation: dict[str, Any]
-    # final safe flag
     safe: bool
-    # conversational reply (when out of scope or chat)
     reply: str | None
-    # message history passed between nodes
     messages: list[BaseMessage]
+
+
+# ---------------------------------------------------------------------------
+# Out-of-scope static reply
+# ---------------------------------------------------------------------------
+
+ACAS_SCOPE_REPLY = """\
+I'm ACAS — the Academic Corpus Analysis System, designed specifically for \
+text corpus analysis tasks.
+
+**What I can help you with:**
+- **Frequency analysis** — find the most common words and their distribution
+- **KWIC (Keyword-in-Context)** — see concordance lines showing a word in context
+- **N-gram & collocation analysis** — identify frequent word patterns with PMI scores
+- **Keyword comparison** — discover distinctive words between two corpora
+- **Corpus-grounded Q&A** — ask open questions about the content of your uploaded texts
+- **Theme and pattern analysis** — explore topics and recurring ideas across your corpus
+- **Source-grounded summarisation** — get evidence-backed summaries from uploaded texts
+
+**To get started**, upload a corpus file (TXT, CSV, JSON, or XML) and try:
+- "Show the top 20 most frequent words excluding stopwords"
+- "Find KWIC for 'justice' with a 10-word context window"
+- "What are the top bigrams in this text?"
+- "Compare my target corpus against a reference corpus"
+- "What are the main themes in this document?"\
+"""
+
+
+# ---------------------------------------------------------------------------
+# Simple corpus retriever (keyword-overlap, no external dependencies)
+# ---------------------------------------------------------------------------
+
+_RETRIEVAL_STOP_WORDS = {
+    "the", "a", "an", "is", "in", "of", "to", "and", "or", "for",
+    "with", "that", "this", "what", "how", "show", "me", "can", "do",
+    "are", "was", "were", "be", "been", "being", "have", "has", "had",
+    "it", "its", "on", "at", "by", "as", "from", "but", "not", "so",
+}
+
+
+def _retrieve_corpus_context(corpus_text: str, query: str, max_chars: int = 2000) -> str:
+    """
+    Retrieve the most query-relevant passages from corpus_text using
+    simple keyword-overlap scoring.  No embeddings required.
+
+    Returns up to max_chars of concatenated top chunks, or "" if
+    corpus_text is empty.
+    """
+    if not corpus_text or not corpus_text.strip():
+        return ""
+
+    # Split into ~150-word chunks
+    words = corpus_text.split()
+    chunk_size = 150
+    chunks = [
+        " ".join(words[i : i + chunk_size])
+        for i in range(0, len(words), chunk_size)
+    ]
+
+    query_terms = {
+        t for t in re.findall(r"[a-zA-Z']+", query.lower())
+        if t not in _RETRIEVAL_STOP_WORDS and len(t) > 2
+    }
+
+    if not query_terms:
+        # No discriminative terms — return the opening passage
+        return corpus_text[:max_chars]
+
+    def _score(chunk: str) -> float:
+        lower = chunk.lower()
+        term_hits = sum(1 for t in query_terms if t in lower)
+        # Prefer chunks that contain more unique query terms
+        return term_hits / max(len(query_terms), 1)
+
+    ranked = sorted(range(len(chunks)), key=lambda i: _score(chunks[i]), reverse=True)
+    selected_chunks = [chunks[i] for i in ranked[:3]]
+    context = "\n\n".join(selected_chunks)
+    return context[:max_chars]
 
 
 # ---------------------------------------------------------------------------
@@ -60,8 +132,9 @@ Your job is to classify the user's query into exactly one of these categories:
 - kwic          : Keyword-in-context / concordance lines / occurrences of a word
 - ngram         : N-grams / bigrams / trigrams / collocations
 - keyword       : Keyword comparison / keyness / comparing two corpora
-- conversational: Greetings, help requests, questions about ACAS capabilities
-- out_of_scope  : Anything unrelated to corpus linguistic analysis
+- conversational: Greetings, help requests, questions about ACAS capabilities,
+                  or open-ended questions about the content of the corpus
+- out_of_scope  : Anything unrelated to corpus linguistic analysis or text corpora
 
 Respond with ONLY the category label (one word, lowercase). No explanation."""
 
@@ -72,8 +145,11 @@ ROUTER_EXAMPLES = """Examples:
 "compare keywords with the reference corpus" → keyword
 "hello" → conversational
 "what can you do?" → conversational
+"what is this text about?" → conversational
+"summarise the main themes" → conversational
 "write me a poem" → out_of_scope
-"what's the weather?" → out_of_scope"""
+"what's the weather?" → out_of_scope
+"book me a flight" → out_of_scope"""
 
 CONVERSATIONAL_SYSTEM = """You are ACAS — the Academic Corpus Analysis System.
 You help linguists and researchers analyse text corpora.
@@ -84,8 +160,12 @@ You can perform:
 • N-gram / Collocation analysis — frequent word combinations with PMI scores
 • Keyword comparison — identifying distinctive words vs a reference corpus
 
+When a corpus excerpt is provided below, ground your answer in that evidence.
+Quote or reference specific parts of the text where relevant.
+Do not invent facts that are not present in the provided context.
+
 For greetings and capability questions, respond warmly and helpfully.
-For requests outside corpus analysis (poems, code, general chat), politely redirect the user."""
+For analysis questions without a corpus, ask the user to upload one first."""
 
 PARAM_EXTRACT_SYSTEM = """You are a parameter extraction assistant. Given a user's corpus analysis query,
 extract the relevant parameters as a JSON object.
@@ -107,10 +187,8 @@ def _build_router_node(llm: ChatOllama):
         response = llm.invoke(messages)
         route = response.content.strip().lower()
 
-        # Normalise to known routes
         valid_routes = {"frequency", "kwic", "ngram", "keyword", "conversational", "out_of_scope"}
         if route not in valid_routes:
-            # Let the LLM's intent guide a best-guess
             for candidate in valid_routes:
                 if candidate in route:
                     route = candidate
@@ -118,7 +196,6 @@ def _build_router_node(llm: ChatOllama):
             else:
                 route = "out_of_scope"
 
-        # Extract parameters with a second LLM call for analysis routes
         params: dict[str, Any] = {}
         if route in {"frequency", "kwic", "ngram", "keyword"}:
             param_messages = [
@@ -167,9 +244,8 @@ def _build_kwic_node(agent: KWICAgent):
         params = state.get("params", {})
         keyword = params.get("keyword", "")
         if not keyword:
-            # Fallback: extract last quoted word or last word from query
             quoted = re.search(r"['\"]([^'\"]+)['\"]", state["query"])
-            keyword = quoted.group(1) if quoted else re.findall(r"[a-zA-Z']+", state["query"])[-1]
+            keyword = quoted.group(1) if quoted else (re.findall(r"[a-zA-Z']+", state["query"]) or [""])[-1]
         result = agent.analyze(
             tokens=state["tokens"],
             keyword=keyword,
@@ -224,37 +300,56 @@ def _build_keyword_node(agent: KeywordAgent):
     return keyword_node
 
 
+# ---------------------------------------------------------------------------
+# Conversational node — RAG-grounded
+# ---------------------------------------------------------------------------
+
 def _build_conversational_node(llm: ChatOllama):
     def conversational_node(state: AgentState) -> AgentState:
+        corpus_context = _retrieve_corpus_context(
+            state.get("corpus_text", ""), state["query"]
+        )
+
+        if corpus_context:
+            context_section = (
+                "\n\n---\nRelevant excerpt from the corpus:\n"
+                + corpus_context
+                + "\n---\n"
+                + "Ground your answer in the excerpt above. "
+                + "Quote or reference specific passages where relevant."
+            )
+        else:
+            context_section = ""
+
         messages = [
-            SystemMessage(content=CONVERSATIONAL_SYSTEM),
+            SystemMessage(content=CONVERSATIONAL_SYSTEM + context_section),
             HumanMessage(content=state["query"]),
         ]
         response = llm.invoke(messages)
         reply = response.content.strip()
         new_messages = list(state["messages"]) + [
-            AIMessage(content=f"[ConversationalAgent] {reply}"),
+            AIMessage(content=f"[ConversationalAgent] {reply[:120]}…"),
         ]
         return {**state, "result": None, "reply": reply, "safe": True, "messages": new_messages}
     return conversational_node
 
 
-def _build_out_of_scope_node(llm: ChatOllama):
+# ---------------------------------------------------------------------------
+# Out-of-scope node — deterministic, no LLM call
+# ---------------------------------------------------------------------------
+
+def _build_out_of_scope_node():
     def out_of_scope_node(state: AgentState) -> AgentState:
-        messages = [
-            SystemMessage(content=CONVERSATIONAL_SYSTEM),
-            HumanMessage(content=(
-                f"The user asked: '{state['query']}'\n\n"
-                "This is outside the scope of corpus linguistic analysis. "
-                "Politely explain what ACAS is designed for and suggest relevant query types they could try instead."
-            )),
-        ]
-        response = llm.invoke(messages)
-        reply = response.content.strip()
         new_messages = list(state["messages"]) + [
-            AIMessage(content=f"[OutOfScopeAgent] {reply}"),
+            AIMessage(content="[OutOfScopeAgent] Request outside ACAS scope — returning scope guidance."),
         ]
-        return {**state, "result": None, "reply": reply, "safe": True, "messages": new_messages}
+        return {
+            **state,
+            "result": None,
+            "reply": ACAS_SCOPE_REPLY,
+            "safe": True,
+            "messages": new_messages,
+        }
     return out_of_scope_node
 
 
@@ -265,11 +360,12 @@ def _build_out_of_scope_node(llm: ChatOllama):
 def _build_validation_node(agent: ValidationAgent):
     def validation_node(state: AgentState) -> AgentState:
         if state.get("result") is None:
-            # Conversational / out-of-scope — already handled
             return state
         validation = agent.validate_result(state["result"])
         new_messages = list(state["messages"]) + [
-            AIMessage(content=f"[ValidationAgent] Safe={validation['safe']}. Issues: {validation.get('issues', [])}."),
+            AIMessage(
+                content=f"[ValidationAgent] Safe={validation['safe']}. Issues: {validation.get('issues', [])}."
+            ),
         ]
         return {**state, "validation": validation, "safe": validation["safe"], "messages": new_messages}
     return validation_node
@@ -279,7 +375,9 @@ def _build_validation_node(agent: ValidationAgent):
 # Routing edge function
 # ---------------------------------------------------------------------------
 
-def _route_edge(state: AgentState) -> Literal["frequency", "kwic", "ngram", "keyword", "conversational", "out_of_scope"]:
+def _route_edge(
+    state: AgentState,
+) -> Literal["frequency", "kwic", "ngram", "keyword", "conversational", "out_of_scope"]:
     return state["route"]
 
 
@@ -298,9 +396,7 @@ class CoordinationAgent:
         self._ngram_agent = NgramAgent()
         self._keyword_agent = KeywordAgent()
         self._validation_agent = ValidationAgent()
-        self._code_runner = SafeCodeExecutionService()
 
-        # Build graph
         graph = StateGraph(AgentState)
 
         graph.add_node("router", _build_router_node(llm))
@@ -309,7 +405,7 @@ class CoordinationAgent:
         graph.add_node("ngram", _build_ngram_node(self._ngram_agent))
         graph.add_node("keyword", _build_keyword_node(self._keyword_agent))
         graph.add_node("conversational", _build_conversational_node(llm))
-        graph.add_node("out_of_scope", _build_out_of_scope_node(llm))
+        graph.add_node("out_of_scope", _build_out_of_scope_node())
         graph.add_node("validator", _build_validation_node(self._validation_agent))
 
         graph.add_edge(START, "router")
@@ -325,7 +421,7 @@ class CoordinationAgent:
         self._graph = graph.compile()
 
     def route_query(self, query: str) -> str:
-        """Return only the routing decision for a query (no specialist execution)."""
+        """Return only the routing decision (single LLM call, no agent execution)."""
         llm = ChatOllama(model=get_model())
         messages = [
             SystemMessage(content=ROUTER_SYSTEM + "\n\n" + ROUTER_EXAMPLES),
@@ -364,7 +460,6 @@ class CoordinationAgent:
 
         final_state = self._graph.invoke(initial_state)
 
-        # Conversational / out-of-scope: return reply as result
         if final_state.get("reply"):
             return {
                 "route": final_state["route"],
