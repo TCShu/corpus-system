@@ -34,7 +34,7 @@ Results are validated before display. All analysis happens locally — no data l
 
 ```bash
 git clone <repo-url>
-cd corpus-system-3
+cd corpus-system
 ```
 
 ### 2. Create and activate a virtual environment
